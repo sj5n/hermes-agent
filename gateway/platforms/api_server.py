@@ -529,7 +529,45 @@ def _request_agent_overrides(
     model_options = body.get("model_options")
     if isinstance(model_options, dict):
         overrides["model_options"] = dict(model_options)
+
+    toolsets = _request_toolset_override(body)
+    if toolsets is not None:
+        overrides["enabled_toolsets_override"] = toolsets
     return overrides
+
+
+def _request_toolset_override(body: Any) -> Optional[List[str]]:
+    """Parse a per-request `enabled_toolsets` narrowing from the body.
+
+    Returns None when the field is absent or malformed (no override); the
+    consumer intersects the list with the platform config, so a request can
+    only ever REMOVE toolsets.
+    """
+    if not isinstance(body, dict):
+        return None
+    raw = body.get("enabled_toolsets")
+    if not isinstance(raw, list):
+        return None
+    cleaned = [t.strip() for t in raw if isinstance(t, str) and t.strip()]
+    return cleaned
+
+
+def _message_text_prefix(content: Any) -> str:
+    if isinstance(content, str):
+        return content[:128]
+    if not isinstance(content, list):
+        return ""
+    parts: List[str] = []
+    for item in content[:4]:
+        if isinstance(item, str):
+            parts.append(item)
+        elif isinstance(item, dict):
+            text = item.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+        if sum(len(part) for part in parts) >= 128:
+            break
+    return "\n".join(parts)[:128]
 
 
 def _is_compressed_summary_message(message: Any) -> bool:
@@ -2820,6 +2858,7 @@ class APIServerAdapter(BasePlatformAdapter):
         confirmed_runtime_lock: bool = False,
         room_dispatch: Optional[Dict[str, Any]] = None,
         room_execution_policy: Optional[Dict[str, Any]] = None,
+        enabled_toolsets_override: Optional[List[str]] = None,
     ) -> Any:
         """
         Create an AIAgent instance using the gateway's runtime config.
@@ -3086,6 +3125,16 @@ class APIServerAdapter(BasePlatformAdapter):
 
         user_config = _load_gateway_config()
         enabled_toolsets = sorted(_get_platform_tools(user_config, "api_server"))
+        if enabled_toolsets_override is not None:
+            # Per-request NARROWING (e.g. an incognito client dropping the
+            # memory/skills toolsets so nothing about the turn can be
+            # persisted). Strictly subtractive: the intersection with the
+            # platform config means a request can remove toolsets but never
+            # enable one the config doesn't grant.
+            enabled_toolsets = sorted(
+                set(enabled_toolsets) & {str(t) for t in enabled_toolsets_override}
+            )
+
         max_iterations = _current_max_iterations()
         if room_dispatch is not None:
             from gateway.hosted_room_execution_policy import RoomExecutionPolicy
@@ -3361,6 +3410,9 @@ class APIServerAdapter(BasePlatformAdapter):
                 "session_chat_streaming": True,
                 "session_fork": True,
                 "session_model_lock": True,
+                # Per-request enabled_toolsets narrowing on completions/
+                # responses bodies (subtractive-only; incognito clients).
+                "enabled_toolsets_override": True,
                 "admin_config_rw": False,
                 "jobs_admin": False,
                 "memory_write_api": False,
@@ -4656,6 +4708,9 @@ class APIServerAdapter(BasePlatformAdapter):
                 agent_overrides["requested_provider"] = requested["provider"]
             if runtime_request.get("model_options"):
                 agent_overrides["model_options"] = runtime_request["model_options"]
+            toolsets = _request_toolset_override(body)
+            if toolsets is not None:
+                agent_overrides["enabled_toolsets_override"] = toolsets
         else:
             stored_model = self._stored_session_model(session)
             stored_route = self._resolve_route(stored_model)
@@ -4766,6 +4821,9 @@ class APIServerAdapter(BasePlatformAdapter):
                 agent_overrides["requested_provider"] = requested["provider"]
             if runtime_request.get("model_options"):
                 agent_overrides["model_options"] = runtime_request["model_options"]
+            toolsets = _request_toolset_override(body)
+            if toolsets is not None:
+                agent_overrides["enabled_toolsets_override"] = toolsets
         else:
             stored_model = self._stored_session_model(session)
             stored_route = self._resolve_route(stored_model)
@@ -7265,6 +7323,7 @@ class APIServerAdapter(BasePlatformAdapter):
         requested_runtime: Optional[Dict[str, Any]] = None,
         route_source: str = "global",
         confirmed_runtime_lock: bool = False,
+        enabled_toolsets_override: Optional[List[str]] = None,
     ) -> tuple:
         """
         Create an agent and run a conversation in a thread executor.
@@ -7336,6 +7395,7 @@ class APIServerAdapter(BasePlatformAdapter):
                         route=route,
                         session_model=session_model,
                         confirmed_runtime_lock=confirmed_runtime_lock,
+                        enabled_toolsets_override=enabled_toolsets_override,
                     )
                     if agent_ref is not None:
                         agent_ref[0] = agent

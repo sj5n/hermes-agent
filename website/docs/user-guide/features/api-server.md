@@ -411,6 +411,49 @@ Example:
 }
 ```
 
+## Per-request toolset narrowing
+
+Authenticated clients can narrow the agent's toolset for a single turn by
+sending `enabled_toolsets` — a list of toolset names — on the same request
+bodies as [per-request model selection](#per-request-model-selection):
+
+- `POST /v1/chat/completions`
+- `POST /v1/responses`
+- `POST /v1/runs`
+- `POST /api/sessions/{session_id}/chat`
+- `POST /api/sessions/{session_id}/chat/stream`
+
+The override is **subtractive-only**: the effective toolset is the
+intersection of the request's list with the platform's configured toolsets
+(`gateway.platforms.api_server` / the `hermes-api-server` default). A
+request can remove a toolset the config grants, but can never add one the
+config doesn't already expose.
+
+This exists for clients that implement an "incognito" mode: dropping
+`memory` and `skills` for a turn means nothing about that conversation can
+be written to persistent memory or the skill library, because the
+background memory-review trigger and skill writes are gated on tool
+*availability* in `agent.valid_tool_names`, not on a session flag. Existing
+memory/user-profile content still gets injected into the system prompt as
+context — only the *write* path is blocked. Everything else (including the
+read-only `session_search` toolset, if left in the list) keeps working
+normally.
+
+Check `features.enabled_toolsets_override` on `GET /v1/capabilities` to
+feature-detect this before relying on it.
+
+Example — narrow to everything except memory and skills for one turn:
+
+```json
+{
+  "model": "MiniMax-M3",
+  "enabled_toolsets": ["web", "terminal", "file", "session_search"],
+  "messages": [
+    {"role": "user", "content": "Quick question, don't remember this one."}
+  ]
+}
+```
+
 ### GET /health
 
 Health check. Returns `{"status": "ok"}`. Also available at **GET /v1/health** for OpenAI-compatible clients that expect the `/v1/` prefix.
