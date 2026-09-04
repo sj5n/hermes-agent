@@ -45,6 +45,9 @@ class BedrockTransport(ProviderTransport):
             temperature: float | None
             guardrail_config: dict | None — Bedrock guardrails
             region: str — AWS region (default 'us-east-1')
+            reasoning_config: dict | None — extended-thinking config
+                ({"enabled": bool, "effort": str}), mapped to Claude thinking
+                via additionalModelRequestFields
         """
         from agent.bedrock_adapter import build_converse_kwargs
 
@@ -58,6 +61,7 @@ class BedrockTransport(ProviderTransport):
             max_tokens=params.get("max_tokens", 4096),
             temperature=params.get("temperature"),
             guardrail_config=guardrail,
+            reasoning_config=params.get("reasoning_config"),
         )
         # Sentinel keys for dispatch — agent pops these before the boto3 call
         kwargs["__bedrock_converse__"] = True

@@ -4411,10 +4411,12 @@ def run_conversation(
                     if canonical_usage.cache_read_tokens and prompt_tokens:
                         _cache_pct = f" cache={canonical_usage.cache_read_tokens}/{prompt_tokens} ({100*canonical_usage.cache_read_tokens/prompt_tokens:.0f}%)"
                     logger.info(
-                        "API call #%d: model=%s provider=%s in=%d out=%d total=%d latency=%.1fs%s",
+                        "API call #%d: model=%s provider=%s in=%d out=%d total=%d latency=%.1fs%s reasoning_config=%s reasoning_tokens=%d",
                         agent.session_api_calls, agent.model, agent.provider or "unknown",
                         prompt_tokens, completion_tokens, total_tokens,
                         api_duration, _cache_pct,
+                        getattr(agent, "reasoning_config", None),
+                        canonical_usage.reasoning_tokens,
                     )
 
                     # On the MoA path, agent.model/provider are the virtual

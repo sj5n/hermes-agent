@@ -1872,6 +1872,7 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
             max_tokens=agent.max_tokens or 4096,
             region=region,
             guardrail_config=guardrail,
+            reasoning_config=agent.reasoning_config,
         )
 
     # Rotation-stable logical cache scope, shared by every OpenAI-wire branch

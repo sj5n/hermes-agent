@@ -1369,6 +1369,7 @@ def build_converse_kwargs(
     top_p: Optional[float] = None,
     stop_sequences: Optional[List[str]] = None,
     guardrail_config: Optional[Dict] = None,
+    reasoning_config: Optional[Dict] = None,
 ) -> Dict[str, Any]:
     """Build kwargs for ``bedrock-runtime.converse()`` or ``converse_stream()``.
 
@@ -1442,6 +1443,49 @@ def build_converse_kwargs(
 
     if guardrail_config:
         kwargs["guardrailConfig"] = guardrail_config
+
+    # Map reasoning_config to Claude extended thinking. Bedrock's Converse
+    # API forwards additionalModelRequestFields verbatim to the model
+    # provider, so the fields are the same ones the native Anthropic API
+    # takes. Mirrors anthropic_adapter's build path: adaptive thinking +
+    # output_config.effort on 4.6+, manual budget_tokens below that, haiku
+    # skipped, disabled -> omit (same as the Anthropic-direct path, which
+    # never sends an explicit disable). Non-Claude Bedrock models are left
+    # untouched — their reasoning contracts differ per family and none is
+    # wired here yet.
+    if (
+        reasoning_config
+        and isinstance(reasoning_config, dict)
+        and "anthropic" in model.lower()
+        and reasoning_config.get("enabled") is not False
+        and "haiku" not in model.lower()
+    ):
+        from agent.anthropic_adapter import (
+            ADAPTIVE_EFFORT_MAP,
+            THINKING_BUDGET,
+            _supports_adaptive_thinking,
+            _supports_xhigh_effort,
+        )
+
+        extra: Dict[str, Any] = {}
+        effort = str(reasoning_config.get("effort", "medium")).lower()
+        if _supports_adaptive_thinking(model):
+            extra["thinking"] = {"type": "adaptive", "display": "summarized"}
+            adaptive_effort = ADAPTIVE_EFFORT_MAP.get(effort, "medium")
+            if adaptive_effort == "xhigh" and not _supports_xhigh_effort(model):
+                adaptive_effort = "max"
+            extra["output_config"] = {"effort": adaptive_effort}
+        else:
+            budget = THINKING_BUDGET.get(effort, 8000)
+            extra["thinking"] = {"type": "enabled", "budget_tokens": budget}
+            # Manual thinking requires temperature 1 (Bedrock: omit) and
+            # a max_tokens that leaves room for the visible reply after
+            # the thinking budget — same as the Anthropic-direct path.
+            kwargs["inferenceConfig"].pop("temperature", None)
+            if max_tokens is not None:
+                kwargs["inferenceConfig"]["maxTokens"] = max(max_tokens, budget + 4096)
+        if extra:
+            kwargs["additionalModelRequestFields"] = extra
 
     if not kwargs["inferenceConfig"]:
         # inferenceConfig is optional on the wire; don't send an empty object.
